@@ -1,0 +1,73 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: light;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-canvas text-ink font-sans text-base antialiased;
+    font-feature-settings: 'cv05' 1, 'ss01' 1;
+  }
+
+  ::selection {
+    background: #dfe5fd;
+  }
+
+  /* One visible focus treatment for the whole app. */
+  :focus-visible {
+    @apply outline-none ring-2 ring-accent/35 ring-offset-2 ring-offset-canvas;
+  }
+
+  h1, h2, h3, h4 {
+    @apply text-ink;
+    letter-spacing: -0.015em;
+  }
+}
+
+@layer components {
+  .scrollarea {
+    scrollbar-width: thin;
+    scrollbar-color: #dcdcd8 transparent;
+  }
+  .scrollarea::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  .scrollarea::-webkit-scrollbar-thumb {
+    background-color: #e3e3df;
+    border: 3px solid transparent;
+    background-clip: content-box;
+    border-radius: 999px;
+  }
+  .scrollarea::-webkit-scrollbar-thumb:hover {
+    background-color: #d2d2cd;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .kbd {
+    @apply inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-sm border border-line
+      bg-raised px-1 text-2xs font-medium text-faint;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
