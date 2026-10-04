@@ -7,6 +7,7 @@ from api.services import LLMFailure, OpenAICompatibleClient, provider_host
 
 
 HINTS = {
+    "not_configured": "Set the missing configuration in backend/.env.",
     "auth": "The key is wrong or revoked. Create a new key in the Groq console and update backend/.env.",
     "model": "This model id is not available. Run check_llm --list-models and set LLM_MODEL to one of them.",
     "rate_limit": "Free-tier limit reached. Wait a minute or use a smaller model.",
@@ -30,16 +31,28 @@ class Command(BaseCommand):
         self.stdout.write(f"key: {key_state}")
         if settings.LLM_PROVIDER == "extractive":
             raise CommandError("not_configured: LLM_PROVIDER is extractive; set it to groq to test Groq.")
+        missing = []
+        if not settings.LLM_API_KEY: missing.append("LLM_API_KEY or GROQ_API_KEY")
+        if not settings.LLM_BASE_URL: missing.append("LLM_BASE_URL")
+        if options["list_models"]:
+            if missing: raise CommandError(f"not_configured: Missing {', '.join(missing)}")
+            client = OpenAICompatibleClient(settings)
+            try:
+                for model in client.list_models(): self.stdout.write(model)
+            except LLMFailure as failure:
+                detail = f"{failure.code}: HTTP {failure.status or 'n/a'}: {failure.message}"
+                hint = HINTS.get(failure.code, "Check provider configuration and logs.")
+                raise CommandError(f"{detail}\n{hint}")
+            return
+        if not settings.LLM_MODEL: missing.append("LLM_MODEL")
+        if missing: raise CommandError(f"not_configured: Missing {', '.join(missing)}")
         client = OpenAICompatibleClient(settings)
         try:
-            if options["list_models"]:
-                for model in client.list_models(): self.stdout.write(model)
-                return
             started = time.monotonic()
             answer = client.generate([{"role": "user", "content": "Reply with the single word: ok"}])
             elapsed = round((time.monotonic() - started) * 1000)
             self.stdout.write(self.style.SUCCESS(f"OK ({elapsed} ms): {answer}"))
         except LLMFailure as failure:
             detail = f"{failure.code}: HTTP {failure.status or 'n/a'}: {failure.message}"
-            hint = HINTS.get(failure.code, f"Missing configuration: {failure.message}" if failure.code == "not_configured" else "Check provider configuration and logs.")
+            hint = HINTS.get(failure.code, "Check provider configuration and logs.")
             raise CommandError(f"{detail}\n{hint}")

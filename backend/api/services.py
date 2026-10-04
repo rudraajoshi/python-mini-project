@@ -82,22 +82,28 @@ def extractive_fallback(chunks):
 
 
 def _normalise_answer(value):
-    value = re.sub(r"<think>.*?</think>", "", value or "", flags=re.S | re.I)
-    value = re.sub(r"\[(?:\s*\d+\s*(?:,\s*\d+\s*)*)\]", "", value).replace("**", "").replace("__", "")
+    value = re.sub(r"```.*?```", "", value or "", flags=re.S | re.I)
+    value = re.sub(r"\[(\d+(?:,\s*\d+)*)\]", "", value).replace("**", "").replace("__", "")
     lines = []
     for line in value.splitlines():
-        line = re.sub(r"^\s*(?:[-*#]+|\d+[.)])\s*", "", line).strip()
+        stripped = line.strip()
+        if stripped and (stripped[0] in "-*#" or re.match(r"^\d+[.)]\s", stripped)):
+            line = re.sub(r"^\s*[-*#]+\s+", "", line).strip()
+            line = re.sub(r"^\d+[.)]\s+", "", line).strip()
         if line: lines.append(re.sub(r"\s+", " ", line))
-    return re.sub(r"\s+([,.!?;:])", r"\1", "\n\n".join(lines)).strip()
+    normalized = "\n\n".join(lines)
+    normalized = re.sub(r"\s+([,.!?;:])", r"\1", normalized)
+    normalized = re.sub(r"\s+$", "", normalized, flags=re.MULTILINE)
+    return normalized.strip()
 
 
 def _cited_chunks(answer, chunks):
     cited = []
-    for match in re.findall(r"\[(.*?)\]", answer):
+    for match in re.findall(r"\[(\d+(?:,\s*\d+)*)\]", answer):
         for raw_number in re.findall(r"\d+", match):
             number = int(raw_number)
             if 1 <= number <= len(chunks) and chunks[number - 1] not in cited: cited.append(chunks[number - 1])
-    return _deduplicate_chunks(cited or chunks[:3])
+    return _deduplicate_chunks(cited) or _deduplicate_chunks(chunks[:3])
 
 
 def _deduplicate_chunks(chunks):
@@ -126,7 +132,8 @@ class OpenAICompatibleClient:
     _reasoning_effort_supported = True
 
     def __init__(self, settings, client=None):
-        self.settings, self.client = settings, client or httpx.Client(timeout=settings.LLM_TIMEOUT_SECONDS)
+        self.settings = settings
+        self.client = client if client is not None else httpx.Client(timeout=settings.LLM_TIMEOUT_SECONDS)
 
     def configuration_error(self):
         missing = []
@@ -164,8 +171,6 @@ class OpenAICompatibleClient:
         return LLMFailure(code, message or f"HTTP {status}", status)
 
     def generate(self, messages):
-        missing = self.configuration_error()
-        if missing: raise LLMFailure("not_configured", f"Missing {missing}")
         url = self.settings.LLM_BASE_URL.rstrip("/") + "/chat/completions"
         headers = {"Authorization": f"Bearer {self.settings.LLM_API_KEY}", "Content-Type": "application/json"}
         retried, include_reasoning = False, True
@@ -177,7 +182,7 @@ class OpenAICompatibleClient:
                 if response.is_success:
                     try: content = response.json()["choices"][0]["message"]["content"]
                     except (ValueError, KeyError, IndexError, TypeError) as error: raise LLMFailure("bad_response", "Missing choices[0].message.content", response.status_code) from error
-                    content = re.sub(r"<think>.*?</think>", "", content or "", flags=re.S | re.I).strip()
+                    content = re.sub(r"```.*?```", "", content or "", flags=re.S | re.I).strip()
                     if not content:
                         failure = LLMEmptyResponse()
                         logger.warning("LLM request failed code=%s status=%s message=%s", failure.code, failure.status, failure.message)
@@ -209,11 +214,14 @@ class OpenAICompatibleClient:
 def synthesize_answer(question, chunks, history, settings):
     if not chunks: return extractive_fallback([]), [], False, None
     if settings.LLM_PROVIDER == "extractive": return extractive_fallback(chunks), _deduplicate_chunks(chunks[:3]), False, None
-    client = OpenAICompatibleClient(settings)
-    missing = client.configuration_error()
+    missing = []
+    if not settings.LLM_API_KEY: missing.append("LLM_API_KEY or GROQ_API_KEY")
+    if not settings.LLM_BASE_URL: missing.append("LLM_BASE_URL")
+    if not settings.LLM_MODEL: missing.append("LLM_MODEL")
     if missing:
-        logger.warning('LLM provider is "%s" but %s is not set; using extractive answers', settings.LLM_PROVIDER, missing)
+        logger.warning('LLM provider is "%s" but %s is not set; using extractive answers', settings.LLM_PROVIDER, ", ".join(missing))
         return extractive_fallback(chunks), _deduplicate_chunks(chunks[:3]), True, "not_configured"
+    client = OpenAICompatibleClient(settings)
     messages, sent_chunks = build_messages(question, chunks, history, settings.LLM_CONTEXT_CHARS)
     if not sent_chunks: return extractive_fallback(chunks), _deduplicate_chunks(chunks[:3]), True, "not_configured"
     try:
@@ -225,8 +233,12 @@ def synthesize_answer(question, chunks, history, settings):
 def summarize_with_llm(document, settings):
     pages = list(document.page_text.items())
     if not pages or settings.LLM_PROVIDER == "extractive": return None, False, None
+    missing = []
+    if not settings.LLM_API_KEY: missing.append("LLM_API_KEY or GROQ_API_KEY")
+    if not settings.LLM_BASE_URL: missing.append("LLM_BASE_URL")
+    if not settings.LLM_MODEL: missing.append("LLM_MODEL")
+    if missing: return None, True, "not_configured"
     client = OpenAICompatibleClient(settings)
-    if client.configuration_error(): return None, True, "not_configured"
     indexes = sorted({0, *[round(index * (len(pages) - 1) / 11) for index in range(min(12, len(pages)))]})
     samples = [f"({document.name}, page {int(pages[index][0])})\n{_trim(pages[index][1], 1500)}" for index in indexes]
     messages = [{"role": "system", "content": SYSTEM_PROMPT.replace("Cite the passages you used with their numbers in square brackets at the end of the sentence, for example [1] or [2][3]. Do not mention \"passage\", \"context\" or \"excerpt\" in the prose itself.", "Do not use citation markers.")}, {"role": "user", "content": "Summarize this document in at most three short paragraphs.\n\n" + "\n\n".join(samples)}]
