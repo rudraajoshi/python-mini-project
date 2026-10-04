@@ -1,0 +1,2 @@
+- Groq uses the existing OpenAI-compatible HTTP client path; extractive answers remain the safe default when no provider is configured.
+- The LLM context is capped at 9,000 characters, with individual passages capped at 1,200 characters, to stay within interactive request budgets.
